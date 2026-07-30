@@ -2,6 +2,8 @@ import { NextResponse } from "next/server";
 import { getSupabaseServerClient, getSupabaseServiceClient } from "@/lib/supabase/server";
 import { AuthError, requireUser } from "@/lib/server/auth/session";
 import { createProject, getProjectBundleBySlug, listPublishedProjects } from "@/lib/server/db/queries";
+import { recordAuditLog } from "@/lib/server/db/audit-log";
+import { checkRateLimit, RateLimitError } from "@/lib/server/rate-limit";
 import { LaunchProjectInputSchema, ProjectSchema } from "@/lib/schemas";
 
 export async function GET() {
@@ -18,6 +20,7 @@ export async function GET() {
 export async function POST(request: Request) {
   try {
     const user = await requireUser();
+    checkRateLimit(`project-create:${user.id}`, 5, 300);
     const body = await request.json();
     const input = LaunchProjectInputSchema.parse(body);
 
@@ -29,6 +32,15 @@ export async function POST(request: Request) {
     if (!service) return NextResponse.json({ error: "Live mode is not configured yet." }, { status: 503 });
 
     const { slug } = await createProject(service, user.id, input);
+    const { data: createdProject } = await service.from("projects").select("id").eq("slug", slug).maybeSingle();
+    if (createdProject) {
+      await recordAuditLog(service, {
+        projectId: createdProject.id as string,
+        actorProfileId: user.id,
+        action: "project.created",
+        detail: { slug, name: input.projectName, ticker: input.projectSymbol },
+      });
+    }
 
     // Read back through the service client too — the caller's session-scoped
     // client may not see the freshly published row within the same request
@@ -38,6 +50,7 @@ export async function POST(request: Request) {
     return NextResponse.json(bundle);
   } catch (cause) {
     if (cause instanceof AuthError) return NextResponse.json({ error: cause.message }, { status: 401 });
+    if (cause instanceof RateLimitError) return NextResponse.json({ error: cause.message }, { status: 429, headers: { "Retry-After": String(cause.retryAfterSeconds) } });
     if (cause && typeof cause === "object" && "issues" in cause) {
       return NextResponse.json({ error: "Invalid project details.", issues: (cause as { issues: unknown }).issues }, { status: 400 });
     }

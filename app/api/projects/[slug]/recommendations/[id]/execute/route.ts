@@ -3,6 +3,7 @@ import { getSupabaseServiceClient } from "@/lib/supabase/server";
 import { AuthError } from "@/lib/server/auth/session";
 import { requireProjectRole } from "@/lib/server/auth/roles";
 import { getTradeQuote, createTradeExecution } from "@/lib/server/db/trading";
+import { recordAuditLog } from "@/lib/server/db/audit-log";
 import { checkRateLimit, RateLimitError } from "@/lib/server/rate-limit";
 
 // Records a swap the operator has ALREADY signed and broadcast from their
@@ -46,6 +47,12 @@ export async function POST(request: Request, { params }: { params: Promise<{ slu
       event_type: "submitted",
       actor_profile_id: user.id,
       detail: { swap_tx_hash: body.swapTxHash, approval_tx_hash: body.approvalTxHash ?? null },
+    });
+    await recordAuditLog(service, {
+      projectId,
+      actorProfileId: user.id,
+      action: "trade.executed",
+      detail: { recommendationId: id, quoteId: body.quoteId, swapTxHash: body.swapTxHash },
     });
 
     return NextResponse.json({ executionId: execution.id, status: execution.status });

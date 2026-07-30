@@ -4,6 +4,7 @@ import { AuthError } from "@/lib/server/auth/session";
 import { requireProjectRole } from "@/lib/server/auth/roles";
 import { getProjectPolicy } from "@/lib/server/db/queries";
 import { updateRecommendationStatus } from "@/lib/server/db/agent-reports";
+import { checkRateLimit, RateLimitError } from "@/lib/server/rate-limit";
 
 // Operator approve/reject on a single recommendation. The policy engine's
 // own verdict (stored at generation time) is never re-derived or
@@ -17,6 +18,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ sl
     }
 
     const { projectId, user } = await requireProjectRole(slug, "operator");
+    checkRateLimit(`recommendation-status:${user.id}`, 20, 60);
     const service = getSupabaseServiceClient();
     if (!service) return NextResponse.json({ error: "Live mode is not configured yet." }, { status: 503 });
 
@@ -25,6 +27,7 @@ export async function PATCH(request: Request, { params }: { params: Promise<{ sl
     return NextResponse.json(recommendation);
   } catch (cause) {
     if (cause instanceof AuthError) return NextResponse.json({ error: cause.message }, { status: 403 });
+    if (cause instanceof RateLimitError) return NextResponse.json({ error: cause.message }, { status: 429, headers: { "Retry-After": String(cause.retryAfterSeconds) } });
     return NextResponse.json({ error: cause instanceof Error ? cause.message : "Failed to update recommendation." }, { status: 500 });
   }
 }
