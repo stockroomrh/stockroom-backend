@@ -173,6 +173,8 @@ export type Recommendation = {
   policyResult: "Pass" | "Fail" | "Human approval";
   /** The full, itemized rule-by-rule trace behind policyResult — empty when nothing was evaluated (e.g. a HOLD). */
   policyChecks: PolicyCheckResult[];
+  /** Set when this recommendation is a step inside a Treasury Plan — the plan's objective, for display outside the Plans tab. */
+  planObjective?: string | null;
   createdAt: string;
 };
 
