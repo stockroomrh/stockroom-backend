@@ -3,7 +3,7 @@ import type { SupabaseClient } from "@supabase/supabase-js";
 import type { Address } from "viem";
 import { getErc20Balances, getNativeBalance, getCurrentBlockNumber } from "@/lib/server/chain/balances";
 import { isRpcConfigured } from "@/lib/server/chain/client";
-import { readPriceFeed, isStablePegAsset, getEthDisplayPriceUsd, getStockDisplayPriceUsd } from "@/lib/server/assets/price-feeds";
+import { readPriceFeed, isStablePegAsset, getEthDisplayPriceUsd, getStockDisplayPriceUsd, getDexScreenerPriceUsd } from "@/lib/server/assets/price-feeds";
 import { isBlockscoutConfigured, getAddressInfo, getTokenTransfers, getTransactions, transactionUrl } from "@/lib/server/chain/blockscout";
 import { allocationBps, isPriceStale, positionValueUsd, rawBalanceToDisplay, reservePercentage, runwayMonths, totalNavUsd } from "@/lib/server/assets/valuation";
 import { firstOf } from "@/lib/server/db/queries";
@@ -116,12 +116,24 @@ export async function syncProjectTreasury(supabase: SupabaseClient, projectId: s
         }
       }
 
-      // WETH (and any other Crypto-type ERC-20 with no Chainlink feed
-      // configured yet) has no other pricing path above — it's economically
-      // identical to native ETH, so fall back to the same display price used
-      // for the native ETH gas position below.
+      // WETH is economically identical to native ETH — reuse the same
+      // display price used for the native ETH gas position below.
       if (priceUsd === 0 && asset.asset_type === "Crypto" && (asset.symbol === "WETH" || asset.symbol === "ETH")) {
         const displayPrice = await getEthDisplayPriceUsd();
+        if (displayPrice) {
+          priceUsd = displayPrice.priceUsd;
+          priceUpdatedAt = displayPrice.updatedAt;
+          priceSource = "swap_quote";
+          stale = false;
+        }
+      }
+
+      // Any other Crypto-type asset with no Chainlink feed (e.g. a project's
+      // own token trading on a DEX, with no oracle) — price it from the
+      // deepest onchain liquidity pool DexScreener knows about. If nothing
+      // is indexed, it stays unpriced/stale rather than showing a fabricated number.
+      if (priceUsd === 0 && asset.asset_type === "Crypto" && asset.symbol !== "WETH" && asset.symbol !== "ETH") {
+        const displayPrice = await getDexScreenerPriceUsd(asset.contract_address);
         if (displayPrice) {
           priceUsd = displayPrice.priceUsd;
           priceUpdatedAt = displayPrice.updatedAt;

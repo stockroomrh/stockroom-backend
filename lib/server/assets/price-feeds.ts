@@ -47,15 +47,26 @@ export function isStablePegAsset(symbol: string) {
  * (trade sizing, reserve checks) — those require the onchain feed.
  */
 export async function getEthDisplayPriceUsd(): Promise<{ priceUsd: number; updatedAt: Date } | null> {
-  try {
-    const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", { cache: "no-store" });
-    if (!response.ok) return null;
-    const body = (await response.json()) as { ethereum?: { usd?: number } };
-    if (typeof body.ethereum?.usd !== "number") return null;
-    return { priceUsd: body.ethereum.usd, updatedAt: new Date() };
-  } catch {
-    return null;
+  // Two attempts, same as the AI report generation retry pattern — CoinGecko's
+  // public API intermittently 403s/rate-limits requests without a browser-like
+  // User-Agent, especially from datacenter IPs (e.g. Vercel), which previously
+  // caused WETH's price — and therefore its contribution to the treasury
+  // total — to silently drop to $0 on any single flaky call.
+  for (let attempt = 1; attempt <= 2; attempt++) {
+    try {
+      const response = await fetch("https://api.coingecko.com/api/v3/simple/price?ids=ethereum&vs_currencies=usd", {
+        cache: "no-store",
+        headers: { "User-Agent": "Mozilla/5.0" },
+      });
+      if (!response.ok) continue;
+      const body = (await response.json()) as { ethereum?: { usd?: number } };
+      if (typeof body.ethereum?.usd !== "number") continue;
+      return { priceUsd: body.ethereum.usd, updatedAt: new Date() };
+    } catch {
+      // fall through and retry once before giving up
+    }
   }
+  return null;
 }
 
 /**
@@ -77,6 +88,30 @@ export async function getStockDisplayPriceUsd(symbol: string): Promise<{ priceUs
     const body = (await response.json()) as { chart?: { result?: { meta?: { regularMarketPrice?: number } }[] } };
     const price = body.chart?.result?.[0]?.meta?.regularMarketPrice;
     if (typeof price !== "number") return null;
+    return { priceUsd: price, updatedAt: new Date() };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Display-only price for a token traded on an onchain DEX (e.g. a project's
+ * own governance/utility token with no Chainlink feed), sourced from
+ * DexScreener's public API. Same onchain-vs-offchain distinction as the
+ * other display-price helpers here: fine for dashboard display, never for
+ * policy-critical decisions — DexScreener is a public aggregator, not an
+ * oracle, and can be wrong or delayed.
+ */
+export async function getDexScreenerPriceUsd(contractAddress: string): Promise<{ priceUsd: number; updatedAt: Date } | null> {
+  try {
+    const response = await fetch(`https://api.dexscreener.com/latest/dex/tokens/${contractAddress}`, { cache: "no-store" });
+    if (!response.ok) return null;
+    const body = (await response.json()) as { pairs?: { priceUsd?: string; liquidity?: { usd?: number } }[] };
+    if (!body.pairs || body.pairs.length === 0) return null;
+    // Prefer the pair with the deepest liquidity — the most reliable price when a token has several pools.
+    const best = body.pairs.reduce((a, b) => ((b.liquidity?.usd ?? 0) > (a.liquidity?.usd ?? 0) ? b : a));
+    const price = best.priceUsd ? Number(best.priceUsd) : NaN;
+    if (!Number.isFinite(price) || price <= 0) return null;
     return { priceUsd: price, updatedAt: new Date() };
   } catch {
     return null;

@@ -89,6 +89,7 @@ function mapRecommendationRow(row: RecommendationRow, projectSlug: string, human
     fromAsset: isIntoAsset ? "USDG" : row.asset_symbol ?? "—",
     toAsset: isIntoAsset ? row.asset_symbol ?? "—" : isIntoReserve ? "USDG" : "—",
     policyResult: policyResultLabel(row.policy_result, humanApprovalRequired),
+    policyChecks: row.policy_result?.checks ?? [],
     createdAt: formatDate(row.created_at),
   };
 }
@@ -136,7 +137,25 @@ export async function getRecommendationsForProject(supabase: SupabaseClient, pro
     .order("created_at", { ascending: false })
     .limit(50);
   if (error) throw new Error(error.message);
-  return ((data ?? []) as unknown as RecommendationRow[]).map((row) => mapRecommendationRow(row, projectSlug, humanApprovalRequired));
+  const rows = (data ?? []) as unknown as RecommendationRow[];
+  if (rows.length === 0) return [];
+
+  // A recommendation that's actually a plan step is otherwise indistinguishable
+  // from a standalone one here — tag it with its plan's objective so the
+  // Recommendations tab doesn't silently duplicate what the Plans tab shows.
+  const { data: planStepRows, error: planStepError } = await supabase
+    .from("plan_steps")
+    .select("recommendation_id, treasury_plans(objective)")
+    .in("recommendation_id", rows.map((row) => row.id));
+  if (planStepError) throw new Error(planStepError.message);
+
+  const objectiveByRecommendationId = new Map<string, string>();
+  for (const step of (planStepRows ?? []) as unknown as { recommendation_id: string; treasury_plans: { objective: string } | { objective: string }[] | null }[]) {
+    const plan = Array.isArray(step.treasury_plans) ? step.treasury_plans[0] : step.treasury_plans;
+    if (plan) objectiveByRecommendationId.set(step.recommendation_id, plan.objective);
+  }
+
+  return rows.map((row) => ({ ...mapRecommendationRow(row, projectSlug, humanApprovalRequired), planObjective: objectiveByRecommendationId.get(row.id) ?? null }));
 }
 
 /**
