@@ -50,6 +50,10 @@ export type Project = {
   accent: string;
   creatorWallet: string;
   treasuryAddress: string;
+  /** A second, distinct wallet a project may want shown publicly (e.g. a marketing/ops wallet) — not the treasury. */
+  marketingWalletAddress?: string | null;
+  /** Live-computed total USD value of the marketing wallet's own holdings — display only, never used in policy/valuation. */
+  marketingWalletValueUsd?: number | null;
   treasuryObjective: string;
   launchDate: string;
   featured: boolean;

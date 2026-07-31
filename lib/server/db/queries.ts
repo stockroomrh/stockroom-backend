@@ -4,6 +4,8 @@ import type { ActivityItem, LaunchProjectInput, Project, ProjectBundle, Treasury
 import { activeChainId } from "@/lib/chain-config";
 import { addressUrl, transactionUrl, getTokenHolderCount } from "@/lib/server/chain/blockscout";
 import { getPonsTokenMarketData } from "@/lib/server/chain/token-market";
+import { getErc20Balances, getNativeBalance } from "@/lib/server/chain/balances";
+import { getDexScreenerPriceUsd, getEthDisplayPriceUsd } from "@/lib/server/assets/price-feeds";
 import { allocationBps, percentChange, reservePercentage, runwayMonths } from "@/lib/server/assets/valuation";
 import { getAgentReportsForProject, getRecommendationsForProject } from "@/lib/server/db/agent-reports";
 
@@ -32,7 +34,7 @@ type ProjectRow = {
   description: string;
   short_description: string;
   website_url: string | null;
-  socials: { website?: string; x?: string; telegram?: string } | null;
+  socials: { website?: string; x?: string; telegram?: string; marketingWallet?: string } | null;
   logo_url: string | null;
   banner_url: string | null;
   treasury_objective: string;
@@ -72,6 +74,7 @@ export function mapProject(row: ProjectRow): Project {
     accent: "#d9ff00",
     creatorWallet: owner?.wallet_address ?? "",
     treasuryAddress: treasury?.address ?? "",
+    marketingWalletAddress: row.socials?.marketingWallet ?? null,
     treasuryObjective: row.treasury_objective,
     launchDate: formatDate(row.created_at),
     featured: false,
@@ -301,6 +304,30 @@ export async function getTreasuryData(supabase: SupabaseClient, projectId: strin
   return { summary, history, positions, activity };
 }
 
+// A marketing wallet is display-only — it's never read into treasury_positions
+// or used for any policy/valuation decision, just a real, live total shown
+// alongside the treasury's own value. Returns null (not $0) on any read
+// failure so the UI can tell "no data yet" apart from "genuinely worth nothing."
+async function getMarketingWalletValueUsd(walletAddress: string, tokenAddress: string, tokenDecimals: number): Promise<number | null> {
+  try {
+    const [nativeBalance, tokenBalances, ethPrice, tokenPrice] = await Promise.all([
+      getNativeBalance(walletAddress as `0x${string}`),
+      getErc20Balances(walletAddress as `0x${string}`, [tokenAddress as `0x${string}`]),
+      getEthDisplayPriceUsd(),
+      getDexScreenerPriceUsd(tokenAddress),
+    ]);
+    if (nativeBalance === null) return null;
+
+    const ethValue = ethPrice ? (Number(nativeBalance) / 1e18) * ethPrice.priceUsd : 0;
+    const tokenEntry = tokenBalances[0];
+    const tokenValue = tokenEntry?.success && tokenPrice ? (Number(tokenEntry.rawBalance) / 10 ** tokenDecimals) * tokenPrice.priceUsd : 0;
+
+    return ethValue + tokenValue;
+  } catch {
+    return null;
+  }
+}
+
 export async function getProjectBundleBySlug(supabase: SupabaseClient, slug: string, viewerRole: "Owner" | "Operator" | "Viewer" = "Viewer"): Promise<ProjectBundle | null> {
   const row = await getProjectRowBySlug(supabase, slug);
   if (!row) return null;
@@ -329,6 +356,10 @@ export async function getProjectBundleBySlug(supabase: SupabaseClient, slug: str
         project.token.circulatingSupply = market.circulatingSupply;
       }
     }
+  }
+
+  if (project.marketingWalletAddress && project.token.contract) {
+    project.marketingWalletValueUsd = await getMarketingWalletValueUsd(project.marketingWalletAddress, project.token.contract, project.token.decimals);
   }
 
   const { summary, history, positions, activity } = await getTreasuryData(supabase, row.id, policy);

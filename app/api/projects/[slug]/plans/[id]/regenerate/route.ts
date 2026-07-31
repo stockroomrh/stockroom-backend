@@ -5,6 +5,8 @@ import { requireProjectRole } from "@/lib/server/auth/roles";
 import { regeneratePlan } from "@/lib/server/db/treasury-plans";
 import { checkRateLimit, RateLimitError } from "@/lib/server/rate-limit";
 
+export const maxDuration = 180;
+
 // Cancels every not-yet-decided step on the current plan and generates a
 // fresh plan for the same objective against current live treasury state.
 // Same billed-Anthropic-call rate limit as a first-time plan generation.

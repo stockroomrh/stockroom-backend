@@ -6,6 +6,10 @@ import { getProjectPolicy } from "@/lib/server/db/queries";
 import { generateAndStorePlan, getTreasuryPlansForProject } from "@/lib/server/db/treasury-plans";
 import { checkRateLimit, RateLimitError } from "@/lib/server/rate-limit";
 
+// Plan generation is a real, multi-step Anthropic call — give it real headroom
+// rather than relying on Vercel's short default function timeout.
+export const maxDuration = 180;
+
 export async function GET(_request: Request, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   try {

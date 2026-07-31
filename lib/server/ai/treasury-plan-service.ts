@@ -48,8 +48,14 @@ export async function generateTreasuryPlan(input: TreasuryPlanPromptInput): Prom
     const message = await client.messages.parse({
       model: MODEL,
       max_tokens: 4096,
+      // "high" effort routinely took 90-120s, long enough that Vercel's
+      // platform connection to the browser was getting cut before the
+      // response arrived — the generation itself succeeded and the plan
+      // still landed in the DB, but the UI never found out and looked
+      // stuck until a manual refresh. "medium" trades some thoroughness
+      // for reliably finishing inside the request lifetime.
       thinking: { type: "adaptive" },
-      output_config: { format: zodOutputFormat(TreasuryPlanSchema), effort: "high" },
+      output_config: { format: zodOutputFormat(TreasuryPlanSchema), effort: "medium" },
       system: TREASURY_PLAN_SYSTEM_PROMPT,
       messages: [{ role: "user", content: userContent }],
     });
