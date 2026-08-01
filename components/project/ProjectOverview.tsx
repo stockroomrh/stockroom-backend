@@ -9,6 +9,8 @@ import { EmptyState, ErrorState, LoadingState, ProjectNotFound } from "@/compone
 import { useAsyncData } from "@/components/data/useAsyncData";
 import { formatCompactCurrency, formatCurrency, shortenAddress } from "@/lib/format";
 import { getProjectBundle } from "@/lib/services";
+import { activeChain } from "@/lib/chain-config";
+import { isTestProject } from "@/lib/test-projects";
 import { ProjectNavigation } from "./ProjectNavigation";
 
 export function ProjectOverview({ slug }: { slug: string }) {
@@ -19,6 +21,7 @@ export function ProjectOverview({ slug }: { slug: string }) {
   const { project, summary, positions, history, reports, recommendations, activity } = bundle;
   const latestReport = reports[0];
   const latestRecommendation = recommendations.find((item) => item.status === "Pending") ?? recommendations[0];
+  const explorerBase = activeChain.blockExplorers.default.url;
 
   const bannerImage = project.bannerUrl ? (
     // eslint-disable-next-line @next/next/no-img-element
@@ -30,7 +33,7 @@ export function ProjectOverview({ slug }: { slug: string }) {
       {bannerImage}
       <section className="project-hero">
         <div className="project-identity"><ProjectMark project={project} size="large"/><div><div className="eyebrow">${project.ticker} · Public project</div><h1>{project.name}</h1><p>{project.shortDescription}</p></div></div>
-        <div className="project-hero-actions"><Link className="primary-button" href={`/app/dashboard/projects/${slug}`}>Manage project</Link><a className="secondary-button" href={project.socials.website ?? "#"} target="_blank" rel="noreferrer">Project website ↗</a></div>
+        <div className="project-hero-actions">{isTestProject(slug) && <StatusBadge tone="grey">TESTNET</StatusBadge>}<Link className="primary-button" href={`/app/dashboard/projects/${slug}`}>Manage project</Link><a className="secondary-button" href={project.socials.website ?? "#"} target="_blank" rel="noreferrer">Project website ↗</a></div>
       </section>
       <ProjectNavigation slug={slug} active="overview"/>
       <EmptyState title="Treasury not indexed yet" body="This project's treasury address hasn't been read from chain yet. Its public balance sheet, Agent reports and activity will appear here once indexing begins."/>
@@ -41,12 +44,13 @@ export function ProjectOverview({ slug }: { slug: string }) {
     {bannerImage}
     <section className="project-hero">
       <div className="project-identity"><ProjectMark project={project} size="large"/><div><div className="eyebrow">${project.ticker} · Public project</div><h1>{project.name}</h1><p>{project.shortDescription}</p></div></div>
-      <div className="project-hero-actions"><StatusBadge tone={summary.health === "HEALTHY" ? "green" : summary.health === "AT RISK" ? "red" : "lime"}>{summary.health}</StatusBadge><Link className="primary-button" href={`/app/dashboard/projects/${slug}`}>Manage project</Link><a className="secondary-button" href={project.socials.website ?? "#"} target="_blank" rel="noreferrer">Project website ↗</a></div>
+      <div className="project-hero-actions">{isTestProject(slug) && <StatusBadge tone="grey">TESTNET</StatusBadge>}<StatusBadge tone={summary.health === "HEALTHY" ? "green" : summary.health === "AT RISK" ? "red" : "lime"}>{summary.health}</StatusBadge><Link className="primary-button" href={`/app/dashboard/projects/${slug}`}>Manage project</Link><a className="secondary-button" href={project.socials.website ?? "#"} target="_blank" rel="noreferrer">Project website ↗</a></div>
     </section>
     <ProjectNavigation slug={slug} active="overview"/>
-    <Panel className="public-summary-bar"><div><span>Token price</span><strong>{formatCurrency(project.token.price, 4)}</strong></div><div><span>Market cap</span><strong>{formatCompactCurrency(project.token.marketCap)}</strong></div><div><span>Token contract</span><strong>{shortenAddress(project.token.contract)}</strong></div><div><span>Treasury address</span><strong>{shortenAddress(project.treasuryAddress)}</strong></div></Panel>
+    <Panel className="public-summary-bar"><div><span>Token price</span><strong>{formatCurrency(project.token.price, 4)}</strong></div><div><span>Market cap</span><strong>{formatCompactCurrency(project.token.marketCap)}</strong></div><div><span>Token contract</span>{project.token.contract ? <a className="inline-link" href={`${explorerBase}/address/${project.token.contract}`} target="_blank" rel="noreferrer" title={project.token.contract}>{shortenAddress(project.token.contract)} ↗</a> : <strong>—</strong>}</div><div><span>Treasury address</span>{project.treasuryAddress ? <a className="inline-link" href={`${explorerBase}/address/${project.treasuryAddress}`} target="_blank" rel="noreferrer" title={project.treasuryAddress}>{shortenAddress(project.treasuryAddress)} ↗</a> : <strong>—</strong>}{project.marketingWalletAddress && <small style={{ display: "block", marginTop: 4 }}>Marketing wallet: <a className="inline-link" href={`${explorerBase}/address/${project.marketingWalletAddress}`} target="_blank" rel="noreferrer" title={project.marketingWalletAddress}>{shortenAddress(project.marketingWalletAddress)} ↗</a></small>}</div></Panel>
     <div className="metrics-grid">
       <MetricCard label="Treasury value" value={formatCurrency(summary.value)} note={`${summary.change30d >= 0 ? "+" : ""}${summary.change30d}% over 30D`} positive={summary.change30d >= 0}/>
+      {project.marketingWalletAddress && <MetricCard label="Marketing wallet value" value={project.marketingWalletValueUsd != null ? formatCurrency(project.marketingWalletValueUsd) : "—"} note="Not part of the treasury"/>}
       <MetricCard label="USDG reserve" value={`${summary.reserve}%`} note={`Policy target: ${summary.reserveTarget}%`}/>
       <MetricCard label="30-day change" value={`${summary.change30d >= 0 ? "+" : ""}${summary.change30d}%`} note={formatCurrency(summary.change30dUsd)} positive={summary.change30d >= 0}/>
       <MetricCard label="Operating runway" value={`${summary.runway}`} note="Months"/>

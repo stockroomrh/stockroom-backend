@@ -32,6 +32,7 @@ export function OperatorConsole({ slug }: { slug: string }) {
   const [assetSaved, setAssetSaved] = useState(false);
   const [classification, setClassification] = useState("Revenue");
   const [generating, setGenerating] = useState(false);
+  const [deciding, setDeciding] = useState(false);
   const [actionError, setActionError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<"recommendations" | "plans">("recommendations");
 
@@ -111,12 +112,20 @@ export function OperatorConsole({ slug }: { slug: string }) {
   const requiresAssetApproval = !isHold && selected.toAsset !== "USDG" && !targetRule?.approved;
   const recommendationBlocked = !isHold && selected.toAsset !== "USDG" && (!targetRule?.approved || !targetRule.agentMayRecommend);
   const amountExceedsAssetLimit = !isHold && Boolean(targetRule?.approved && targetRule.maxSinglePurchaseUsd > 0 && amount > targetRule.maxSinglePurchaseUsd);
-  const policyBlocked = requiresAssetApproval || recommendationBlocked || amountExceedsAssetLimit;
+  // The real, authoritative verdict — reserve floor, trade-size caps, everything
+  // evaluateRecommendation() actually checked at generation time. The three
+  // flags above only catch asset-approval issues fixable from this screen;
+  // this catches everything else so we never show "passed" on a real block.
+  const serverPolicyFailed = !isHold && selected.policyResult === "Fail";
+  const policyBlocked = requiresAssetApproval || recommendationBlocked || amountExceedsAssetLimit || serverPolicyFailed;
+  const alreadyDecided = status === "Approved" || status === "Rejected";
 
   const recommendationWithAmount: Recommendation = { ...selected, amountUsd: amount, amount: formatCurrency(amount) };
   const updateStatus = (next: ProposalStatus) => setLocalStatuses((current) => ({ ...current, [selected.id]: next }));
   const decideRecommendation = async (next: "Approved" | "Rejected") => {
     if (isLive) {
+      if (deciding || alreadyDecided) return;
+      setDeciding(true);
       setActionError(null);
       try {
         const result = await setRecommendationStatus(slug, selected.id, next === "Approved" ? "approved" : "rejected");
@@ -125,6 +134,8 @@ export function OperatorConsole({ slug }: { slug: string }) {
         }
       } catch (cause) {
         setActionError(cause instanceof Error ? cause.message : "Failed to update recommendation.");
+      } finally {
+        setDeciding(false);
       }
       return;
     }
@@ -167,14 +178,21 @@ export function OperatorConsole({ slug }: { slug: string }) {
         {!isHold && <div className="trade-route"><div><span>From</span><strong>{selected.fromAsset}</strong></div><i>→</i><div><span>To</span><strong>{selected.toAsset}</strong></div></div>}
         {isHold
           ? <div className="policy-result compact"><div className="check-icon">✓</div><div><strong>No action required</strong><p>The Agent recommended holding — there is no trade to approve or execute for this review.</p></div></div>
-          : policyBlocked ? <div className="policy-result compact blocked"><div className="check-icon">!</div><div><strong>Policy action required</strong><p>{requiresAssetApproval ? `${selected.toAsset} is not an approved treasury asset. Approve it below before requesting a quote.` : recommendationBlocked ? `The Agent is not permitted to recommend ${selected.toAsset}. Enable that permission below.` : `The amount exceeds the ${formatCurrency(targetRule?.maxSinglePurchaseUsd ?? 0, 0)} single-purchase limit.`}</p></div></div> : <div className="policy-result compact"><div className="check-icon">✓</div><div><strong>Policy validation passed</strong><p>Every trade still requires an authorised human wallet signature.</p></div></div>}
+          : policyBlocked ? <div className="policy-result compact blocked"><div className="check-icon">!</div><div><strong>Policy action required</strong><p>{requiresAssetApproval ? `${selected.toAsset} is not an approved treasury asset. Approve it below before requesting a quote.` : recommendationBlocked ? `The Agent is not permitted to recommend ${selected.toAsset}. Enable that permission below.` : amountExceedsAssetLimit ? `The amount exceeds the ${formatCurrency(targetRule?.maxSinglePurchaseUsd ?? 0, 0)} single-purchase limit.` : "This recommendation was blocked by the policy engine when it was generated — see the checks below."}</p></div></div> : <div className="policy-result compact"><div className="check-icon">✓</div><div><strong>Policy validation passed</strong><p>Every trade still requires an authorised human wallet signature.</p></div></div>}
+        {selected.policyChecks.length > 0 && <div style={{ fontFamily: "monospace", fontSize: 12, lineHeight: 1.7, margin: "8px 0", opacity: 0.9 }}>
+          {selected.policyChecks.map((check) => <div key={check.name} style={{ display: "flex", gap: 8 }}>
+            <span>{check.passed ? "✓" : "✗"}</span>
+            <span className="mono" style={{ minWidth: 200 }}>{check.name}</span>
+            <span style={{ opacity: 0.75 }}>{check.reason}</span>
+          </div>)}
+        </div>}
         {isHold ? <div className="quote-placeholder">This is a Hold recommendation — no trade to quote or execute.</div> : isLive ? (
           policyBlocked ? <div className="quote-placeholder">Resolve the policy issue above before requesting a live quote.</div> : <LiveSwapPanel slug={slug} recommendation={selected} treasuryAddress={bundleForRender.project.treasuryAddress} onExecuted={(updated)=>setLiveBundle(updated)}/>
         ) : <>
           <div className="quote-request-row"><button className="secondary-button" onClick={requestQuote} disabled={quoteLoading || tradingPaused || policyBlocked}>{quoteLoading?"Requesting quote…":"Request mock quote"}</button>{quote && <StatusBadge tone="green">Quote ready · {quote.expiresAt}</StatusBadge>}</div>
           {quote ? <div className="quote-details"><div><span>Expected output</span><b>{quote.expectedOutput}</b></div><div><span>Price impact</span><b>{quote.priceImpact.toFixed(2)}%</b></div><div><span>Estimated fees</span><b>{formatCurrency(quote.feesUsd)}</b></div><div><span>Network</span><b>{quote.network}</b></div></div> : <div className="quote-placeholder">Request a quote to display expected output, price impact and fees.</div>}
         </>}
-        <div className="card-actions"><button className="secondary-button danger-button" onClick={()=>void decideRecommendation("Rejected")} disabled={status==="Rejected"}>Reject</button><button className="secondary-button" onClick={()=>updateStatus("Pending")} disabled={isLive}>Return to pending</button><button className="primary-button" onClick={()=>void decideRecommendation("Approved")} disabled={tradingPaused || policyBlocked || status==="Approved"}>Approve proposal</button></div>
+        <div className="card-actions"><button className="secondary-button danger-button" onClick={()=>void decideRecommendation("Rejected")} disabled={deciding || alreadyDecided}>{deciding ? "Working…" : "Reject"}</button><button className="secondary-button" onClick={()=>updateStatus("Pending")} disabled={isLive}>Return to pending</button><button className="primary-button" onClick={()=>void decideRecommendation("Approved")} disabled={deciding || tradingPaused || policyBlocked || alreadyDecided}>{deciding ? "Working…" : "Approve proposal"}</button></div>
         <div className="signature-box"><span>{isLive ? "Wallet signature" : "Wallet signature placeholder"}</span><b>{status === "Approved" ? "Ready for authorised wallet signature" : `Proposal ${status.toLowerCase()}`}</b></div>
       </section>
     </div>
