@@ -25,6 +25,63 @@ type ApprovedAssetRow = {
   asset_registry: AssetRegistryRow | AssetRegistryRow[] | null;
 };
 
+type RawActivityRow = {
+  project_id: string; tx_hash: string; block_number: number; occurred_at: string;
+  activity_type: string; description: string; asset_symbol: string; raw_amount: string;
+  counterparty_address?: string; status: string;
+};
+
+/**
+ * Converts each newly-seen activity row's raw onchain amount into a real
+ * display value using the asset's actual decimals (never shown as raw
+ * wei/smallest-unit again), and attempts a real USD value using the same
+ * pricing cascade the position-pricing loop below uses — stable peg,
+ * Chainlink feed, stock display price, then DEX price. Decimals and price
+ * are stored ON the row (not looked up again on every read) so a later
+ * change to an asset's registry entry never rewrites history.
+ */
+async function priceActivityRows(supabase: SupabaseClient, chainId: number, rows: RawActivityRow[]) {
+  const symbols = [...new Set(rows.map((row) => row.asset_symbol))];
+  if (symbols.length === 0) return [];
+
+  const { data: registryRows } = await supabase
+    .from("asset_registry")
+    .select("symbol, decimals, asset_type, current_multiplier, price_feed_address, contract_address")
+    .eq("chain_id", chainId)
+    .in("symbol", symbols);
+  const registryBySymbol = new Map((registryRows ?? []).map((row) => [row.symbol as string, row]));
+
+  const priced: (RawActivityRow & { decimals: number; usd_value: number | null })[] = [];
+  for (const row of rows) {
+    const asset = registryBySymbol.get(row.asset_symbol);
+    const decimals = asset?.decimals ?? 18;
+    const display = Number(row.raw_amount) / 10 ** decimals;
+
+    let priceUsd: number | null = null;
+    if (isStablePegAsset(row.asset_symbol)) {
+      priceUsd = 1;
+    } else if (asset?.price_feed_address) {
+      const feed = await readPriceFeed(asset.price_feed_address as Address);
+      if (feed) priceUsd = feed.priceUsd;
+    }
+    if (priceUsd === null && (asset?.asset_type === "Stock Token" || asset?.asset_type === "ETF Token")) {
+      const displayPrice = await getStockDisplayPriceUsd(row.asset_symbol.replace(/x$/i, ""));
+      if (displayPrice) priceUsd = displayPrice.priceUsd * (asset?.current_multiplier ?? 1);
+    }
+    if (priceUsd === null && (row.asset_symbol === "WETH" || row.asset_symbol === "ETH")) {
+      const displayPrice = await getEthDisplayPriceUsd();
+      if (displayPrice) priceUsd = displayPrice.priceUsd;
+    }
+    if (priceUsd === null && asset?.contract_address) {
+      const displayPrice = await getDexScreenerPriceUsd(asset.contract_address);
+      if (displayPrice) priceUsd = displayPrice.priceUsd;
+    }
+
+    priced.push({ ...row, decimals, usd_value: priceUsd !== null ? display * priceUsd : null });
+  }
+  return priced;
+}
+
 /**
  * Runs one full treasury sync for a project: reads real balances from chain,
  * prices approved assets, computes deterministic valuation, and writes a new
@@ -281,8 +338,9 @@ export async function syncProjectTreasury(supabase: SupabaseClient, projectId: s
           }),
         ];
         if (activityRows.length > 0) {
+          const pricedRows = await priceActivityRows(supabase, account.chain_id, activityRows as RawActivityRow[]);
           // ON CONFLICT (project_id, tx_hash) DO NOTHING via upsert with ignoreDuplicates
-          await supabase.from("activity_items").upsert(activityRows, { onConflict: "project_id,tx_hash,asset_symbol", ignoreDuplicates: true });
+          await supabase.from("activity_items").upsert(pricedRows, { onConflict: "project_id,tx_hash,asset_symbol", ignoreDuplicates: true });
         }
       } catch {
         // Activity indexing is best-effort — a Blockscout hiccup shouldn't fail the whole sync.

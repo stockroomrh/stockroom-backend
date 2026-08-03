@@ -203,8 +203,20 @@ type PositionRow = {
 };
 type ActivityRow = {
   id: string; tx_hash: string | null; occurred_at: string; activity_type: ActivityItem["type"];
-  description: string; asset_symbol: string | null; raw_amount: string | null; usd_value: number | null; status: string;
+  description: string; asset_symbol: string | null; raw_amount: string | null; usd_value: number | null;
+  decimals: number | null; counterparty_address: string | null; status: string;
 };
+
+/** Never scientific notation, never raw wei — a real display amount for a real token quantity. */
+function formatTokenDisplayAmount(rawAmount: string | null, decimals: number | null): string {
+  if (!rawAmount) return "0";
+  const value = Number(rawAmount) / 10 ** (decimals ?? 18);
+  if (!Number.isFinite(value)) return "0";
+  if (value === 0) return "0";
+  // Small amounts need more precision to not round to 0; large ones don't need 6 decimals of noise.
+  const maximumFractionDigits = value < 1 ? 6 : value < 1000 ? 4 : 2;
+  return value.toLocaleString(undefined, { maximumFractionDigits, minimumFractionDigits: 0 });
+}
 
 export async function getTreasuryData(supabase: SupabaseClient, projectId: string, policy: TreasuryPolicy): Promise<{ summary: TreasurySummary | null; history: TreasurySnapshot[]; positions: TreasuryPosition[]; activity: ActivityItem[] }> {
   const { data: snapshots, error: snapshotsError } = await supabase
@@ -217,7 +229,7 @@ export async function getTreasuryData(supabase: SupabaseClient, projectId: strin
 
   const { data: activityRows, error: activityError } = await supabase
     .from("activity_items")
-    .select("id, tx_hash, occurred_at, activity_type, description, asset_symbol, raw_amount, usd_value, status")
+    .select("id, tx_hash, occurred_at, activity_type, description, asset_symbol, raw_amount, usd_value, decimals, counterparty_address, status")
     .eq("project_id", projectId)
     .order("occurred_at", { ascending: false })
     .limit(50);
@@ -230,8 +242,10 @@ export async function getTreasuryData(supabase: SupabaseClient, projectId: strin
     type: row.activity_type,
     description: row.description,
     asset: row.asset_symbol ?? "",
-    amount: row.raw_amount ?? "",
-    usdValue: row.usd_value !== null ? `$${row.usd_value.toLocaleString()}` : "—",
+    amount: formatTokenDisplayAmount(row.raw_amount, row.decimals),
+    usdValue: row.usd_value !== null
+      ? `${row.activity_type === "Withdrawal" ? "-" : "+"}$${Math.abs(row.usd_value).toLocaleString(undefined, { maximumFractionDigits: 2 })}`
+      : "value unavailable",
     status: row.status === "confirmed" ? "Confirmed" : row.status === "needs_review" ? "Needs review" : "Pending",
     blockscoutUrl: row.tx_hash ? transactionUrl(row.tx_hash) : "",
   }));

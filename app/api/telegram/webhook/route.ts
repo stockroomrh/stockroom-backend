@@ -33,6 +33,12 @@ async function handleStart(service: NonNullable<ReturnType<typeof getSupabaseSer
   return sendTelegramMessage(chatId, `✅ This chat is now linked to <b>${escapeHtml(project.name)}</b>. You'll get alerts here for real deposits and withdrawals. Try /treasury for the current balance.`);
 }
 
+function healthExplanation(health: string, reserve: number, target: number): string {
+  if (health === "AT RISK") return `Reserve is ${Math.max(0, target - reserve).toFixed(0)}pp below the ${target}% target — the policy engine will block most new buys until this improves.`;
+  if (health === "WATCH") return `Reserve is close to the ${target}% target but not there yet — worth monitoring.`;
+  return `Reserve is at or above the ${target}% target.`;
+}
+
 async function handleTreasuryCommand(service: NonNullable<ReturnType<typeof getSupabaseServiceClient>>, chatId: string) {
   const { data: link } = await service.from("telegram_links").select("project_id").eq("chat_id", chatId).maybeSingle();
   if (!link) return sendTelegramMessage(chatId, "This chat isn't linked to a project yet. Generate a link code from that project's Operator Console, then send /start &lt;code&gt; here.");
@@ -44,15 +50,27 @@ async function handleTreasuryCommand(service: NonNullable<ReturnType<typeof getS
   if (!policy) return sendTelegramMessage(chatId, "This project has no treasury policy configured yet.");
   const { summary, activity } = await getTreasuryData(service, link.project_id, policy);
 
-  if (!summary) return sendTelegramMessage(chatId, `<b>${escapeHtml(project.name)}</b>\nNo treasury snapshot indexed yet.`);
+  if (!summary) return sendTelegramMessage(chatId, `<b>${escapeHtml(project.name)}</b> Treasury\nNo treasury snapshot indexed yet.`);
 
-  const recent = activity.slice(0, 5).map((item) => `• ${item.type} — ${item.asset} ${item.amount} (${item.usdValue})`).join("\n");
+  const recent = activity
+    .filter((item) => item.type === "Deposit" || item.type === "Withdrawal")
+    .slice(0, 5)
+    .map((item) => `${item.type === "Deposit" ? "↓ Deposited" : "↑ Withdrew"} ${item.amount} ${item.asset} · ${item.usdValue}`)
+    .join("\n");
+
+  const baseUrl = `https://stockroom.finance/app/project/${project.slug}`;
   const text = [
-    `<b>${escapeHtml(project.name)}</b> treasury`,
-    `Value: $${summary.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
-    `USDG reserve: ${summary.reserve}% (target ${summary.reserveTarget}%)`,
-    `Health: ${summary.health}`,
-    recent ? `\nRecent activity:\n${recent}` : "\nNo recent activity.",
+    `<b>${escapeHtml(project.name)} Treasury</b>`,
+    ``,
+    `Total value: $${summary.value.toLocaleString(undefined, { maximumFractionDigits: 2 })}`,
+    `Reserve ratio: ${summary.reserve}% / ${summary.reserveTarget}% target`,
+    `Treasury health: ${summary.health === "AT RISK" ? "At risk" : summary.health === "WATCH" ? "Watch" : "Healthy"}`,
+    healthExplanation(summary.health, summary.reserve, summary.reserveTarget),
+    ``,
+    `<b>Recent activity</b>`,
+    recent || "No recent deposits or withdrawals.",
+    ``,
+    `<a href="${baseUrl}/treasury">View treasury ↗</a> · <a href="${baseUrl}/activity">View transactions ↗</a>`,
   ].join("\n");
 
   return sendTelegramMessage(chatId, text);
