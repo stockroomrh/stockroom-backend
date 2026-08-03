@@ -1,0 +1,20 @@
+name: Telegram treasury alerts
+
+# Vercel's Hobby plan only allows a cron job to run once a day, which isn't
+# frequent enough for "instant" deposit/withdrawal alerts — so this workflow
+# is the actual trigger instead. GitHub Actions' schedule is best-effort
+# (can run a few minutes late under load), but reliably runs every 5-10
+# minutes in practice, which is what "checked every few minutes" needs.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call the alerts endpoint
+        run: |
+          curl -sS -f -X GET "https://stockroom.finance/api/cron/telegram-alerts" \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}"
