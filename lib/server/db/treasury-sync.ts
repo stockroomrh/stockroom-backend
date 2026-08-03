@@ -249,28 +249,36 @@ export async function syncProjectTreasury(supabase: SupabaseClient, projectId: s
       try {
         const [txResult, transferResult] = await Promise.all([getTransactions(treasuryAddress), getTokenTransfers(treasuryAddress)]);
         const activityRows = [
-          ...txResult.items.filter((tx) => tx.status === "ok" && tx.value !== "0").map((tx) => ({
-            project_id: projectId,
-            tx_hash: tx.hash,
-            block_number: tx.block_number,
-            occurred_at: tx.timestamp,
-            activity_type: tx.to?.hash?.toLowerCase() === treasuryAddress.toLowerCase() ? "Deposit" : "Withdrawal",
-            description: tx.to?.hash?.toLowerCase() === treasuryAddress.toLowerCase() ? "Native ETH received" : "Native ETH sent",
-            asset_symbol: "ETH",
-            raw_amount: tx.value,
-            status: "needs_review",
-          })),
-          ...transferResult.items.map((transfer) => ({
-            project_id: projectId,
-            tx_hash: transfer.transaction_hash,
-            block_number: transfer.block_number,
-            occurred_at: transfer.timestamp,
-            activity_type: transfer.to?.hash?.toLowerCase() === treasuryAddress.toLowerCase() ? "Deposit" : "Withdrawal",
-            description: `${transfer.token.symbol} transfer`,
-            asset_symbol: transfer.token.symbol,
-            raw_amount: transfer.total?.value ?? "0",
-            status: "needs_review",
-          })),
+          ...txResult.items.filter((tx) => tx.status === "ok" && tx.value !== "0").map((tx) => {
+            const isDeposit = tx.to?.hash?.toLowerCase() === treasuryAddress.toLowerCase();
+            return {
+              project_id: projectId,
+              tx_hash: tx.hash,
+              block_number: tx.block_number,
+              occurred_at: tx.timestamp,
+              activity_type: isDeposit ? "Deposit" : "Withdrawal",
+              description: isDeposit ? "Native ETH received" : "Native ETH sent",
+              asset_symbol: "ETH",
+              raw_amount: tx.value,
+              counterparty_address: isDeposit ? tx.from?.hash : tx.to?.hash,
+              status: "needs_review",
+            };
+          }),
+          ...transferResult.items.map((transfer) => {
+            const isDeposit = transfer.to?.hash?.toLowerCase() === treasuryAddress.toLowerCase();
+            return {
+              project_id: projectId,
+              tx_hash: transfer.transaction_hash,
+              block_number: transfer.block_number,
+              occurred_at: transfer.timestamp,
+              activity_type: isDeposit ? "Deposit" : "Withdrawal",
+              description: `${transfer.token.symbol} transfer`,
+              asset_symbol: transfer.token.symbol,
+              raw_amount: transfer.total?.value ?? "0",
+              counterparty_address: isDeposit ? transfer.from?.hash : transfer.to?.hash,
+              status: "needs_review",
+            };
+          }),
         ];
         if (activityRows.length > 0) {
           // ON CONFLICT (project_id, tx_hash) DO NOTHING via upsert with ignoreDuplicates
