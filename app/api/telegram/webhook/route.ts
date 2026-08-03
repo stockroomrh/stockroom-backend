@@ -113,6 +113,30 @@ const NOT_LINKED_MESSAGE = "This chat isn't linked to a project yet. Generate a 
 
 const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME ?? "").replace(/^@/, "").toLowerCase();
 
+/** Full intro shown whenever this chat gains its treasury connection — either the operator who linked it, or anyone who joins afterwards. */
+function buildWelcomeText(projectName: string, greeting: string): string {
+  return [
+    `🏦 <b>Stockroom Treasury Operator</b>`,
+    ``,
+    greeting,
+    `This chat is linked to <b>${escapeHtml(projectName)}</b>'s treasury.`,
+    ``,
+    `I post a real-time alert here whenever funds move in or out, and I'll answer questions about the treasury on demand. I only ever <i>propose</i> — every trade I suggest is independently checked against the project's on-chain policy before a human can approve it, and I can never execute anything myself.`,
+    ``,
+    `<b>Menu</b>`,
+    `📊 Treasury — current status`,
+    `🧠 Brief — AI daily summary`,
+    `💸 Simulate — test a hypothetical spend`,
+    `🗂 Plan — build a staged treasury plan`,
+    `❓ Ask AI — ask a free-text question`,
+    ``,
+    `<b>Commands</b>`,
+    `/treasury · /brief · /simulate spend &lt;amount&gt; &lt;label&gt; · /plan &lt;objective&gt; · /help`,
+    ``,
+    `Tap a button below to get started 👇`,
+  ].join("\n");
+}
+
 /**
  * Telegram sends a new_chat_members update both when the bot itself is added
  * to a group and when any human joins one the bot is already in — these need
@@ -133,11 +157,13 @@ async function handleNewChatMembers(service: Service, chatId: string, members: T
 
   const linked = await getLinkedProject(service, chatId);
   const names = humans.map((member) => escapeHtml(member.first_name)).join(", ");
-  const text = linked
-    ? `👋 Welcome, ${names}! This chat is linked to <b>${escapeHtml(linked.projectName)}</b>'s treasury — I'll post an alert here whenever funds move in or out, and you can ask me things like /treasury, /brief, or just type a question.`
-    : `👋 Welcome, ${names}! I'm the Stockroom Treasury Operator bot. Once an operator links this chat to a project from its Operator Console, I'll start posting real-time treasury alerts here.`;
 
-  await sendTelegramMessage(chatId, text, linked ? MAIN_MENU_KEYBOARD : undefined);
+  if (!linked) {
+    await sendTelegramMessage(chatId, `👋 Welcome, ${names}! I'm the Stockroom Treasury Operator bot. Once an operator links this chat to a project from its Operator Console, I'll start posting real-time treasury alerts here.`);
+    return;
+  }
+
+  await sendTelegramMessage(chatId, buildWelcomeText(linked.projectName, `👋 Welcome, ${names}!\n`), MAIN_MENU_KEYBOARD);
 }
 
 async function handleStart(service: Service, chatId: string, chatTitle: string, code: string) {
@@ -162,7 +188,7 @@ async function handleStart(service: Service, chatId: string, chatTitle: string, 
 
   return sendTelegramMessage(
     chatId,
-    `✅ This chat is now linked to <b>${escapeHtml(project.name)}</b>. You'll get alerts here for real deposits and withdrawals.\n\nUse the menu below to get started 👇`,
+    buildWelcomeText(project.name, `✅ Linked!\n`),
     MAIN_MENU_KEYBOARD,
   );
 }
