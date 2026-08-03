@@ -21,10 +21,13 @@ export const maxDuration = 60;
 
 type Service = NonNullable<ReturnType<typeof getSupabaseServiceClient>>;
 
+type TelegramChatMember = { id: number; is_bot: boolean; first_name: string; username?: string };
+
 type TelegramUpdate = {
   message?: {
     chat: { id: number; type: string; title?: string; first_name?: string; username?: string };
     text?: string;
+    new_chat_members?: TelegramChatMember[];
   };
   callback_query?: {
     id: string;
@@ -107,6 +110,35 @@ async function getLinkedProject(service: Service, chatId: string): Promise<Linke
 }
 
 const NOT_LINKED_MESSAGE = "This chat isn't linked to a project yet. Generate a link code from that project's Operator Console, then send /start &lt;code&gt; here.";
+
+const BOT_USERNAME = (process.env.TELEGRAM_BOT_USERNAME ?? "").replace(/^@/, "").toLowerCase();
+
+/**
+ * Telegram sends a new_chat_members update both when the bot itself is added
+ * to a group and when any human joins one the bot is already in — these need
+ * different messages (setup instructions vs. a plain welcome).
+ */
+async function handleNewChatMembers(service: Service, chatId: string, members: TelegramChatMember[]) {
+  const botJoined = members.some((member) => member.is_bot && member.username?.toLowerCase() === BOT_USERNAME);
+  if (botJoined) {
+    await sendTelegramMessage(
+      chatId,
+      `👋 <b>Stockroom Treasury Operator</b> here.\n\nI post real-time alerts in this chat when funds move in or out of the treasury, and I can answer questions about it on demand.\n\nTo get started: generate a link code from the project's Operator Console (Settings → Telegram), then send <code>/start &lt;code&gt;</code> here.`,
+    );
+    return;
+  }
+
+  const humans = members.filter((member) => !member.is_bot);
+  if (humans.length === 0) return;
+
+  const linked = await getLinkedProject(service, chatId);
+  const names = humans.map((member) => escapeHtml(member.first_name)).join(", ");
+  const text = linked
+    ? `👋 Welcome, ${names}! This chat is linked to <b>${escapeHtml(linked.projectName)}</b>'s treasury — I'll post an alert here whenever funds move in or out, and you can ask me things like /treasury, /brief, or just type a question.`
+    : `👋 Welcome, ${names}! I'm the Stockroom Treasury Operator bot. Once an operator links this chat to a project from its Operator Console, I'll start posting real-time treasury alerts here.`;
+
+  await sendTelegramMessage(chatId, text, linked ? MAIN_MENU_KEYBOARD : undefined);
+}
 
 async function handleStart(service: Service, chatId: string, chatTitle: string, code: string) {
   const { data: linkCode, error } = await service
@@ -394,6 +426,15 @@ export async function POST(request: Request) {
   }
 
   const message = update?.message;
+  if (message?.new_chat_members?.length) {
+    try {
+      await handleNewChatMembers(service, String(message.chat.id), message.new_chat_members);
+    } catch {
+      // A single malformed update must never take the webhook down.
+    }
+    return NextResponse.json({ ok: true });
+  }
+
   if (!message?.text) return NextResponse.json({ ok: true });
 
   const chatId = String(message.chat.id);

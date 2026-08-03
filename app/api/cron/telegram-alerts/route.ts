@@ -3,6 +3,14 @@ import { getSupabaseServiceClient } from "@/lib/supabase/server";
 import { transactionUrl, addressUrl } from "@/lib/server/chain/blockscout";
 import { sendTelegramMessage, escapeHtml } from "@/lib/server/telegram/bot-client";
 import { reservePercentage } from "@/lib/server/assets/valuation";
+import { syncProjectTreasury, ChainNotConfiguredError } from "@/lib/server/db/treasury-sync";
+
+// Real on-chain sync per linked project now happens here, on this same
+// 5-minute poll (see .github/workflows/telegram-alerts.yml) — previously
+// activity_items only got fresh rows when an operator manually clicked
+// "Sync" in the dashboard, so a deposit could sit undetected indefinitely
+// if nobody happened to have the app open.
+export const maxDuration = 60;
 
 const DAILY_SUMMARY_INTERVAL_MS = 24 * 60 * 60 * 1000;
 
@@ -80,6 +88,14 @@ export async function GET(request: Request) {
     try {
       const { data: project } = await service.from("projects").select("name").eq("id", link.project_id).maybeSingle();
       const projectName = project?.name ?? "Project";
+
+      try {
+        await syncProjectTreasury(service, link.project_id);
+      } catch (syncCause) {
+        // A stale read for this one project must never block alerting for
+        // the rest, or for whatever was already indexed for this project.
+        if (!(syncCause instanceof ChainNotConfiguredError)) throw syncCause;
+      }
 
       const sinceIso = link.last_alerted_activity_at ?? new Date(0).toISOString();
       const { data: newActivity, error: activityError } = await service
