@@ -4,7 +4,7 @@ export function isTelegramConfigured(): boolean {
   return Boolean(process.env.TELEGRAM_BOT_TOKEN);
 }
 
-export type InlineKeyboardButton = { text: string; callback_data: string } | { text: string; url: string };
+export type InlineKeyboardButton = { text: string; callback_data: string } | { text: string; url: string } | { text: string; web_app: { url: string } };
 export type InlineKeyboardMarkup = { inline_keyboard: InlineKeyboardButton[][] };
 export type ReplyKeyboardMarkup = { keyboard: { text: string }[][]; resize_keyboard: true; is_persistent: true };
 export type TelegramReplyMarkup = InlineKeyboardMarkup | ReplyKeyboardMarkup;

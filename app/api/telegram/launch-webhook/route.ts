@@ -7,6 +7,7 @@ import {
   updateDraft,
   abandonActiveDraft,
   markAwaitingSignature,
+  uploadTelegramPhoto,
   nextStep,
   previousStep,
   type LaunchStep,
@@ -25,8 +26,10 @@ type Service = NonNullable<ReturnType<typeof getSupabaseServiceClient>>;
 
 const LAUNCH_BOT_TOKEN = process.env.TELEGRAM_LAUNCH_BOT_TOKEN;
 
+type TelegramPhotoSize = { file_id: string; width: number; height: number };
+
 type TelegramUpdate = {
-  message?: { chat: { id: number; type: string }; text?: string };
+  message?: { chat: { id: number; type: string }; text?: string; photo?: TelegramPhotoSize[] };
   callback_query?: { id: string; data?: string; message?: { chat: { id: number }; message_id: number } };
 };
 
@@ -203,6 +206,12 @@ function reviewKeyboard(): InlineKeyboardMarkup {
 }
 
 function renderStep(step: LaunchStep, data: LaunchDraftData): { text: string; keyboard?: InlineKeyboardMarkup } {
+  if (step === "logo") {
+    return { text: "Send a square logo / profile picture for the project — or /skip." };
+  }
+  if (step === "banner") {
+    return { text: "Send a wide banner image — or /skip." };
+  }
   if (step === "approved_assets") {
     return { text: "Which assets, beyond the USDG reserve, can the Treasury Agent hold and recommend? Tap to toggle.", keyboard: assetsKeyboard(data.approvedAssets ?? []) };
   }
@@ -221,6 +230,18 @@ function renderStep(step: LaunchStep, data: LaunchDraftData): { text: string; ke
 // --- Text replies --------------------------------------------------------
 
 async function handleTextReply(service: Service, draft: LaunchDraftRow, chatId: string, text: string) {
+  if ((draft.step === "logo" || draft.step === "banner") && text.trim().toLowerCase() === "/skip") {
+    const next = nextStep(draft.step);
+    await updateDraft(service, draft.id, { step: next });
+    const rendered = renderStep(next, draft.data);
+    await sendTelegramMessage(chatId, rendered.text, rendered.keyboard, LAUNCH_BOT_TOKEN);
+    return;
+  }
+  if (draft.step === "logo" || draft.step === "banner") {
+    await sendTelegramMessage(chatId, "Send an image, or type /skip.", undefined, LAUNCH_BOT_TOKEN);
+    return;
+  }
+
   if (draft.step === "revenue_routing_custom") {
     const value = text.trim();
     if (value.length < 3 || value.length > 200) {
@@ -246,6 +267,28 @@ async function handleTextReply(service: Service, draft: LaunchDraftRow, chatId: 
     return;
   }
   const newData = { ...draft.data, [config.field]: parsed.value } as unknown as LaunchDraftData;
+  const next = nextStep(draft.step);
+  await updateDraft(service, draft.id, { step: next, data: newData });
+  const rendered = renderStep(next, newData);
+  await sendTelegramMessage(chatId, rendered.text, rendered.keyboard, LAUNCH_BOT_TOKEN);
+}
+
+async function handlePhotoReply(service: Service, draft: LaunchDraftRow, chatId: string, photos: TelegramPhotoSize[]) {
+  if (draft.step !== "logo" && draft.step !== "banner") {
+    await sendTelegramMessage(chatId, "I wasn't expecting an image for this step — use the buttons above, or /status to see it again.", undefined, LAUNCH_BOT_TOKEN);
+    return;
+  }
+  if (!LAUNCH_BOT_TOKEN) return;
+
+  const largest = photos.reduce((best, candidate) => (candidate.width > best.width ? candidate : best));
+  const url = await uploadTelegramPhoto(service, LAUNCH_BOT_TOKEN, largest.file_id, draft.id, draft.step);
+  if (!url) {
+    await sendTelegramMessage(chatId, "⚠️ Couldn't process that image — try again, or /skip.", undefined, LAUNCH_BOT_TOKEN);
+    return;
+  }
+
+  const field = draft.step === "logo" ? "logoUrl" : "bannerUrl";
+  const newData: LaunchDraftData = { ...draft.data, [field]: url };
   const next = nextStep(draft.step);
   await updateDraft(service, draft.id, { step: next, data: newData });
   const rendered = renderStep(next, newData);
@@ -344,7 +387,7 @@ async function handleCallback(service: Service, callback: NonNullable<TelegramUp
         "",
         "This link expires in 30 minutes. If it expires, send /status here for a fresh one.",
       ].join("\n");
-      await editTelegramMessage(chatId, messageId, text, { inline_keyboard: [[{ text: "🔐 Connect wallet & sign", url: signUrl }]] }, LAUNCH_BOT_TOKEN);
+      await editTelegramMessage(chatId, messageId, text, { inline_keyboard: [[{ text: "🔐 Connect wallet & sign", web_app: { url: signUrl } }]] }, LAUNCH_BOT_TOKEN);
       return;
     }
 
@@ -385,9 +428,21 @@ export async function POST(request: Request) {
   }
 
   const message = update?.message;
-  if (!message?.text) return NextResponse.json({ ok: true });
-
+  if (!message) return NextResponse.json({ ok: true });
   const chatId = String(message.chat.id);
+
+  if (message.photo && message.photo.length > 0) {
+    try {
+      const draft = await getActiveDraft(service, chatId);
+      if (draft) await handlePhotoReply(service, draft, chatId, message.photo);
+      else await sendTelegramMessage(chatId, "Send /launch to start building a new Stockroom project.", undefined, LAUNCH_BOT_TOKEN);
+    } catch {
+      // A single malformed update must never take the webhook down.
+    }
+    return NextResponse.json({ ok: true });
+  }
+
+  if (!message.text) return NextResponse.json({ ok: true });
   const text = message.text.trim();
 
   try {
@@ -407,7 +462,7 @@ export async function POST(request: Request) {
       } else if (draft.status === "awaiting_signature") {
         await markAwaitingSignature(service, draft.id);
         const signUrl = `https://stockroom.finance/app/launch?draft=${draft.draft_token}`;
-        await sendTelegramMessage(chatId, "🔐 Here's a fresh sign-in link — it expires in 30 minutes.", { inline_keyboard: [[{ text: "🔐 Connect wallet & sign", url: signUrl }]] }, LAUNCH_BOT_TOKEN);
+        await sendTelegramMessage(chatId, "🔐 Here's a fresh sign-in link — it expires in 30 minutes.", { inline_keyboard: [[{ text: "🔐 Connect wallet & sign", web_app: { url: signUrl } }]] }, LAUNCH_BOT_TOKEN);
       } else {
         const rendered = renderStep(draft.step, draft.data);
         await sendTelegramMessage(chatId, rendered.text, rendered.keyboard, LAUNCH_BOT_TOKEN);

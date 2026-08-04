@@ -8,6 +8,8 @@ export const LAUNCH_STEP_ORDER = [
   "project_name",
   "project_symbol",
   "description",
+  "logo",
+  "banner",
   "token_supply",
   "treasury_address",
   "reserve_target",
@@ -39,6 +41,8 @@ export type LaunchDraftData = {
   maximumTrade?: number;
   riskApproach?: string;
   reportingFrequency?: string;
+  logoUrl?: string;
+  bannerUrl?: string;
 };
 
 export type LaunchDraftRow = {
@@ -158,5 +162,42 @@ export function draftToLaunchInput(data: LaunchDraftData): LaunchProjectInput {
     reportingFrequency: data.reportingFrequency ?? "Weekly",
     assetRules: createAssetRules(data.approvedAssets ?? [], data.maximumSingleAsset ?? 20),
     treasuryAddress: data.treasuryAddress,
+    logoUrl: data.logoUrl,
+    bannerUrl: data.bannerUrl,
   };
+}
+
+/**
+ * Pulls a photo the operator sent in chat, re-hosts it in the same public
+ * `project-media` bucket the web upload flow uses, and returns the public
+ * URL. Runs under the service role (no authenticated user exists yet at
+ * draft time), so it writes to a draft-scoped path instead of the
+ * `{userId}/...` path the RLS policy requires for a normal browser upload —
+ * storage policies don't apply to the service role, and by the time the
+ * project actually exists this URL is just a plain string on the row like
+ * any other logoUrl/bannerUrl.
+ */
+export async function uploadTelegramPhoto(supabase: SupabaseClient, botToken: string, fileId: string, draftId: string, kind: "logo" | "banner"): Promise<string | null> {
+  try {
+    const fileInfoResponse = await fetch(`https://api.telegram.org/bot${botToken}/getFile?file_id=${fileId}`);
+    const fileInfo = (await fileInfoResponse.json()) as { ok: boolean; result?: { file_path?: string } };
+    if (!fileInfo.ok || !fileInfo.result?.file_path) return null;
+    const filePath = fileInfo.result.file_path;
+    const extension = filePath.split(".").pop() || "jpg";
+
+    const fileResponse = await fetch(`https://api.telegram.org/file/bot${botToken}/${filePath}`);
+    if (!fileResponse.ok) return null;
+    const bytes = await fileResponse.arrayBuffer();
+
+    const storagePath = `telegram-drafts/${draftId}/${kind}.${extension}`;
+    const { error } = await supabase.storage
+      .from("project-media")
+      .upload(storagePath, bytes, { upsert: true, contentType: fileResponse.headers.get("content-type") ?? "image/jpeg" });
+    if (error) return null;
+
+    const { data } = supabase.storage.from("project-media").getPublicUrl(storagePath);
+    return data.publicUrl;
+  } catch {
+    return null;
+  }
 }
