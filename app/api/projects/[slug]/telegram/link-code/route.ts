@@ -14,22 +14,12 @@ function generateCode(): string {
 // Generates a short-lived code an operator pastes into Telegram as
 // `/start <code>` to link that chat to this project. The code is only ever
 // shown inside the authenticated console — linking a chat requires real
-// project access, not just knowing the bot exists. On top of that, an extra
-// shared password gates this specific action, since it's the one thing in
-// the console that exposes a project's treasury data to a brand new,
-// unauthenticated Telegram chat.
-export async function POST(request: Request, { params }: { params: Promise<{ slug: string }> }) {
+// project access, not just knowing the bot exists.
+export async function POST(_request: Request, { params }: { params: Promise<{ slug: string }> }) {
   const { slug } = await params;
   try {
     const { projectId, user } = await requireProjectRole(slug, "operator");
     checkRateLimit(`telegram-link-code:${user.id}`, 10, 300);
-
-    const lockPassword = process.env.TELEGRAM_LINK_PASSWORD;
-    if (!lockPassword) return NextResponse.json({ error: "Telegram linking is not configured yet." }, { status: 503 });
-
-    const body = await request.json().catch(() => null);
-    const submittedPassword = typeof body?.password === "string" ? body.password : "";
-    if (submittedPassword !== lockPassword) return NextResponse.json({ error: "Incorrect password." }, { status: 403 });
 
     const service = getSupabaseServiceClient();
     if (!service) return NextResponse.json({ error: "Live mode is not configured yet." }, { status: 503 });
