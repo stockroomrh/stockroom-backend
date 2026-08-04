@@ -15,10 +15,14 @@ export type TelegramReplyMarkup = InlineKeyboardMarkup | ReplyKeyboardMarkup;
  * silently fabricated as "sent". Returns the sent message_id so callers can
  * later edit it in place (e.g. turning a "generating..." placeholder into
  * the finished result) rather than spamming a new message per step.
+ *
+ * `botToken` defaults to the operator bot (TELEGRAM_BOT_TOKEN) — pass the
+ * launch bot's token explicitly to send from that bot instead. Two separate
+ * bots, one shared low-level HTTP client.
  */
-export async function sendTelegramMessage(chatId: string, text: string, replyMarkup?: TelegramReplyMarkup): Promise<{ ok: boolean; error?: string; messageId?: number }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return { ok: false, error: "TELEGRAM_BOT_TOKEN is not configured." };
+export async function sendTelegramMessage(chatId: string, text: string, replyMarkup?: TelegramReplyMarkup, botToken?: string): Promise<{ ok: boolean; error?: string; messageId?: number }> {
+  const token = botToken ?? process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return { ok: false, error: "Telegram bot token is not configured." };
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
@@ -41,9 +45,9 @@ export async function sendTelegramMessage(chatId: string, text: string, replyMar
  * A no-op edit (identical text) is a normal Telegram 400 ("message is not
  * modified"), not a real failure, so callers don't need to guard against it.
  */
-export async function editTelegramMessage(chatId: string, messageId: number, text: string, replyMarkup?: InlineKeyboardMarkup): Promise<{ ok: boolean; error?: string }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
-  if (!token) return { ok: false, error: "TELEGRAM_BOT_TOKEN is not configured." };
+export async function editTelegramMessage(chatId: string, messageId: number, text: string, replyMarkup?: InlineKeyboardMarkup, botToken?: string): Promise<{ ok: boolean; error?: string }> {
+  const token = botToken ?? process.env.TELEGRAM_BOT_TOKEN;
+  if (!token) return { ok: false, error: "Telegram bot token is not configured." };
 
   try {
     const response = await fetch(`https://api.telegram.org/bot${token}/editMessageText`, {
@@ -64,8 +68,8 @@ export async function editTelegramMessage(chatId: string, messageId: number, tex
  * this on every callback_query or the button stays in a spinning state
  * client-side until it times out on its own.
  */
-export async function answerCallbackQuery(callbackQueryId: string, text?: string): Promise<void> {
-  const token = process.env.TELEGRAM_BOT_TOKEN;
+export async function answerCallbackQuery(callbackQueryId: string, text?: string, botToken?: string): Promise<void> {
+  const token = botToken ?? process.env.TELEGRAM_BOT_TOKEN;
   if (!token) return;
   try {
     await fetch(`https://api.telegram.org/bot${token}/answerCallbackQuery`, {
