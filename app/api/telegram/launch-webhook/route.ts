@@ -33,7 +33,25 @@ type TelegramUpdate = {
   callback_query?: { id: string; data?: string; message?: { chat: { id: number }; message_id: number } };
 };
 
-const WELCOME_TEXT = `🏦 <b>Launch a project on Stockroom</b>\n\nI'll walk you through setting up a token, treasury, and policy — same real backend the web launch wizard uses. Nothing deploys until the very end, when you connect and sign with your own wallet.\n\nSend /cancel any time to discard the draft, /status to see where you are.`;
+const WELCOME_TEXT = [
+  `🚀 <b>Launch a project on Stockroom</b>`,
+  ``,
+  `I'll walk you through creating a real token, its public treasury, and its policy — the same backend the web launch wizard uses. This isn't a preview: by the end, a real project exists.`,
+  ``,
+  `<b>What I'll ask for</b>`,
+  `📛 Name, ticker & description`,
+  `🖼 Logo & banner — optional, just send a photo`,
+  `🪙 Token supply`,
+  `🏦 Treasury wallet & reserve target`,
+  `📊 Approved assets & revenue routing`,
+  `🛡 Policy limits`,
+  `🤖 Treasury Agent behavior`,
+  ``,
+  `Nothing deploys until the very last step — connecting and signing with your own wallet, right here in this chat. Stockroom never generates or holds that key.`,
+  ``,
+  `/status — see where you are, anytime`,
+  `/cancel — discard the current draft`,
+].join("\n");
 
 // --- Step configuration ------------------------------------------------------
 
