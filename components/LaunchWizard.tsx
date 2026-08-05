@@ -12,6 +12,7 @@ import { SupportedAssets } from "@/components/SupportedAssets";
 import { useMode } from "@/components/mode/ModeProvider";
 import { useAuth } from "@/components/mode/AuthProvider";
 import { ImageUpload } from "@/components/mode/ImageUpload";
+import { WalletButton } from "@/components/mode/WalletButton";
 import { STOCKROOM_TOKEN_ABI, STOCKROOM_TOKEN_BYTECODE } from "@/lib/contracts/stockroom-token";
 import { PONS_LAUNCH_FACTORY_ABI, PONS_LAUNCH_FACTORY_ADDRESS } from "@/lib/contracts/pons-launch-factory";
 
@@ -41,9 +42,28 @@ const initialForm: LaunchProjectInput = {
 
 const EVM_ADDRESS_PATTERN = /^0x[a-fA-F0-9]{40}$/;
 
+type TelegramWebAppLink = { openLink: (url: string, options?: { try_instant_view?: boolean }) => void };
+
+/**
+ * Inside the Telegram Mini App window, a normal same-origin link just
+ * navigates the embedded webview in place — fine for the wizard itself, but
+ * the full Operator Dashboard isn't meant to be used cramped inside a chat
+ * window. When Telegram's WebApp bridge is present, pop these two links out
+ * to the operator's real browser instead; everywhere else this is a no-op
+ * and the link behaves like a normal <a>.
+ */
+function openInBrowser(path: string) {
+  return (event: React.MouseEvent) => {
+    const telegram = (window as unknown as { Telegram?: { WebApp?: TelegramWebAppLink } }).Telegram;
+    if (!telegram?.WebApp?.openLink) return;
+    event.preventDefault();
+    telegram.WebApp.openLink(`${window.location.origin}${path}`);
+  };
+}
+
 type TokenDeployStatus = "idle" | "deploying" | "waiting" | "recording" | "deployed" | "failed";
 
-export function LaunchWizard() {
+export function LaunchWizard({ draftPrefill, minimal }: { draftPrefill?: { token: string; input: LaunchProjectInput }; minimal?: boolean } = {}) {
   const { mode } = useMode();
   const { session } = useAuth();
   const isLive = mode === "live";
@@ -52,8 +72,8 @@ export function LaunchWizard() {
   const { deployContractAsync } = useDeployContract();
   const { writeContractAsync } = useWriteContract();
   const { switchChainAsync } = useSwitchChain();
-  const [step, setStep] = useState(0);
-  const [form, setForm] = useState<LaunchProjectInput>(initialForm);
+  const [step, setStep] = useState(draftPrefill ? 5 : 0);
+  const [form, setForm] = useState<LaunchProjectInput>(draftPrefill?.input ?? initialForm);
   const [created, setCreated] = useState<ProjectBundle | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -114,6 +134,16 @@ export function LaunchWizard() {
     if (!response.ok) throw new Error(responseBody?.error ?? "Failed to record the deployment.");
     setCreated(responseBody as ProjectBundle);
     setTokenDeployStatus("deployed");
+    // Fire-and-forget: this launch came from a Telegram draft, so let that
+    // chat know it's live. A failure here shouldn't block the success screen
+    // the operator is already looking at.
+    if (draftPrefill) {
+      void fetch(`/api/telegram/launch-draft/${draftPrefill.token}/complete`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ slug: bundle.project.slug }),
+      }).catch(() => {});
+    }
   };
 
   const deployPlainToken = async (bundle: ProjectBundle) => {
@@ -232,7 +262,29 @@ export function LaunchWizard() {
           : tokenDeployStatus === "failed" ? <><strong>Token {isPonsLaunch ? "launch" : "deployment"} failed.</strong><span>{tokenDeployError} </span><button className="secondary-button" onClick={()=>void deployToken(created)}>Retry {isPonsLaunch ? "launch" : "deployment"}</button></>
           : <><strong>Token not {isPonsLaunch ? "launched" : "deployed"} yet.</strong><span>The project was published, but the token {isPonsLaunch ? "hasn't launched on Pons" : "contract hasn't been deployed"}. </span><button className="secondary-button" onClick={()=>void deployToken(created)}>{isPonsLaunch ? "Launch on Pons" : "Deploy token"}</button></>}
       </div>}
-      <div className="success-actions"><a className="primary-button" href={`/app/dashboard/projects/${created.project.slug}/operator`}>Open Operator Dashboard</a><a className="secondary-button" href={publicUrl}>View Public Project</a><button className="secondary-button" onClick={()=>navigator.clipboard?.writeText(`${window.location.origin}${publicUrl}`)}>Share Launch</button></div><button className="text-button" onClick={()=>{setCreated(null);setStep(0);setTokenDeployStatus("idle");setTokenDeployError(null);setForm({...initialForm, assetRules: createAssetRules(["USDG", "ETH", "NVDA", "AAPL", "SPY"], 20)})}}>Launch another project</button></div>;
+      <div className="success-actions"><a className="primary-button" href={`/app/dashboard/projects/${created.project.slug}/operator`} onClick={openInBrowser(`/app/dashboard/projects/${created.project.slug}/operator`)}>Open Operator Dashboard</a><a className="secondary-button" href={publicUrl} onClick={openInBrowser(publicUrl)}>View Public Project</a><button className="secondary-button" onClick={()=>navigator.clipboard?.writeText(`${window.location.origin}${publicUrl}`)}>Share Launch</button></div><button className="text-button" onClick={()=>{setCreated(null);setStep(0);setTokenDeployStatus("idle");setTokenDeployError(null);setForm({...initialForm, assetRules: createAssetRules(["USDG", "ETH", "NVDA", "AAPL", "SPY"], 20)})}}>Launch another project</button></div>;
+  }
+
+  if (minimal) {
+    return (
+      <div className="launch-sign-solo">
+        <section className="wizard-card">
+          <div className="launch-sign-header"><span className="eyebrow">Confirm &amp; sign</span><h2>{form.projectName || "Review your launch"}</h2></div>
+          <div className="launch-sign-wallet"><WalletButton /></div>
+          {isLive && !session && <div className="form-note full" style={{ marginBottom: 16 }}><strong>Connect your wallet to continue.</strong><span>This is the wallet that will control the treasury — nothing deploys until you sign.</span></div>}
+          <div className="review-grid">
+            <ReviewBox label="Project" value={(form.projectName || "Untitled project") + " / $" + (form.projectSymbol || "—")} />
+            <ReviewBox label="Token" value={`${form.totalSupply.toLocaleString()} fixed supply`} />
+            <ReviewBox label="Treasury" value={form.treasuryAddress || "No address entered"} />
+            <ReviewBox label="Policy" value={`${form.minimumReserve}% reserve · ${form.assetRules.filter((rule) => rule.approved).length} approved assets`} />
+            <ReviewBox label="Treasury Agent" value={`${form.riskApproach} · ${form.reportingFrequency} reports`} />
+            <ReviewBox label="Execution" value="Human wallet approval required" />
+          </div>
+          {error && <div className="form-error">{error}</div>}
+          <div className="wizard-actions"><button className="primary-button" style={{ width: "100%" }} onClick={launch} disabled={submitting || (isLive && !session)}>{submitting ? "Publishing…" : isLive && !session ? "Connect wallet above to continue" : "Sign & launch"}</button></div>
+        </section>
+      </div>
+    );
   }
 
   return <div className="launch-layout">
