@@ -397,7 +397,7 @@ async function handleCallback(service: Service, callback: NonNullable<TelegramUp
     if (data === "review:confirm") {
       await markAwaitingSignature(service, draft.id);
       await answerCallbackQuery(callback.id, "Preparing your sign-in link...", LAUNCH_BOT_TOKEN);
-      const signUrl = `https://stockroom.finance/app/launch?draft=${draft.draft_token}`;
+      const signUrl = `https://stockroom.finance/launch-sign/${draft.draft_token}`;
       const text = [
         "🔐 <b>One step left.</b>",
         "",
@@ -479,7 +479,7 @@ export async function POST(request: Request) {
         await sendTelegramMessage(chatId, "No draft in progress. Send /launch to start one.", undefined, LAUNCH_BOT_TOKEN);
       } else if (draft.status === "awaiting_signature") {
         await markAwaitingSignature(service, draft.id);
-        const signUrl = `https://stockroom.finance/app/launch?draft=${draft.draft_token}`;
+        const signUrl = `https://stockroom.finance/launch-sign/${draft.draft_token}`;
         await sendTelegramMessage(chatId, "🔐 Here's a fresh sign-in link — it expires in 30 minutes.", { inline_keyboard: [[{ text: "🔐 Connect wallet & sign", web_app: { url: signUrl } }]] }, LAUNCH_BOT_TOKEN);
       } else {
         const rendered = renderStep(draft.step, draft.data);
